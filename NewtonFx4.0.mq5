@@ -13,42 +13,42 @@ CTrade trade;
 //+------------------------------------------------------------------+
 
 // ==================== RISK MANAGEMENT ====================
-input double LotSize            = 0.2;     // Fixed Lot Size
+input double LotSize            = 0.02;    // Fixed Lot Size
 input bool   UseRiskPercent     = false;   // Use Risk % Instead of Fixed Lots
-input double RiskPercent        = 1.0;     // Risk % of Equity Per Trade
-input int    MaxTradesPerDay    = 5;       // Max Trades Per Day
-input double DailyStopPct      = 5.0;     // Daily Max Drawdown % (kill switch)
-input double WeeklyStopPct     = 15.0;    // Weekly Max Drawdown % (kill switch)
+input double RiskPercent        = 0.025;   // Risk % of Equity Per Trade
+input int    MaxTradesPerDay    = 8;       // Max Trades Per Day
+input double DailyStopPct      = 4.5;     // Daily Max Drawdown % (kill switch)
+input double WeeklyStopPct     = 9.5;     // Weekly Max Drawdown % (kill switch)
 
 // ==================== ENTRY SIGNALS ====================
-input int    EMA_FastLen        = 47;      // EMA Fast Period
-input int    EMA_SlowLen        = 99;      // EMA Slow Period
+input int    EMA_FastLen        = 37;      // EMA Fast Period
+input int    EMA_SlowLen        = 167;     // EMA Slow Period
 input int    ADX_Len            = 8;       // ADX Period
 input double MinADX             = 36.0;    // ADX Minimum Threshold
-input double MinVolRatio        = 1.15;    // Relative Volume Minimum
+input double MinVolRatio        = 1.27;    // Relative Volume Minimum
 input int    Fibo_Len           = 10;      // Fibonacci Lookback Bars
 input double FiboMinRetrace     = 0.236;   // Fibonacci Min Retracement
 input double FiboMaxRetrace     = 0.786;   // Fibonacci Max Retracement
-input int    FiboPullbackBars   = 5;       // Fibo Freshness: max bars since touch (0=off)
+input int    FiboPullbackBars   = 3;       // Fibo Freshness: max bars since touch (0=off)
 input bool   RequireADXRising   = true;    // Require ADX Rising (ADX[1]>ADX[2])
 
 // ==================== ATR & DYNAMIC REGIME ====================
 input int    ATR_Len            = 10;      // ATR Fast Period
-input int    ATR_SlowLen        = 94;      // ATR Slow Period
-input double VR_Min             = 0.9;     // Volatility Ratio Min Clamp
-input double VR_Max             = 1.35;    // Volatility Ratio Max Clamp
-input double K_SL              = 0.35;    // VR Sensitivity - Stop Loss
-input double K_TP              = 0.25;    // VR Sensitivity - Take Profit
-input double K_BE              = 0.30;    // VR Sensitivity - Break Even
-input double K_TR              = 0.40;    // VR Sensitivity - Trailing
+input int    ATR_SlowLen        = 34;      // ATR Slow Period
+input double VR_Min             = 0.95;    // Volatility Ratio Min Clamp
+input double VR_Max             = 1.45;    // Volatility Ratio Max Clamp
+input double K_SL              = 0.45;    // VR Sensitivity - Stop Loss
+input double K_TP              = 0.45;    // VR Sensitivity - Take Profit
+input double K_BE              = 0.40;    // VR Sensitivity - Break Even
+input double K_TR              = 0.25;    // VR Sensitivity - Trailing
 
 // ==================== STOP LOSS & TAKE PROFIT ====================
-input double SL_ATR_Mult        = 3.2;     // Stop Loss (ATR multiplier)
+input double SL_ATR_Mult        = 4.9;     // Stop Loss (ATR multiplier)
 input double TP_ATR_Mult        = 9.5;     // Take Profit (ATR multiplier)
-input double BE_ATR_Trigger     = 4.0;     // Break Even Trigger (ATR multiplier)
-input double Trail_ATR_Mult     = 2.5;     // Trailing Stop (ATR multiplier)
-input double Trail_Offset_ATR   = 1.0;     // Trailing Offset (ATR multiplier)
-input double TrailAfterBE_Mult  = 7.5;     // Trailing After BE (ATR multiplier)
+input double BE_ATR_Trigger     = 3.5;     // Break Even Trigger (ATR multiplier)
+input double Trail_ATR_Mult     = 2.4;     // Trailing Stop (ATR multiplier)
+input double Trail_Offset_ATR   = 0.8;     // Trailing Offset (ATR multiplier)
+input double TrailAfterBE_Mult  = 2.3;     // Trailing After BE (ATR multiplier)
 
 // ==================== PARTIAL CLOSE ====================
 input bool   UsePartialClose    = true;    // Enable Partial Close
@@ -57,12 +57,12 @@ input double PartialClosePct    = 50.0;    // Partial Close % of Position
 
 // ==================== DYNAMIC TP ====================
 input bool   UseDynamicTP       = true;    // Enable Dynamic TP
-input double DynTP_MinMult      = 11.1;    // Dynamic TP Min Floor (ATR mult)
+input double DynTP_MinMult      = 9.95;    // Dynamic TP Min Floor (ATR mult)
 
 // ==================== SESSION FILTERS ====================
 input bool   UseSessionLocks    = true;    // Enable Session Filters
 input int    AsiaStartHour      = 0;       // Asia Block Start (server hour)
-input int    AsiaEndHour        = 7;       // Asia Block End (server hour)
+input int    AsiaEndHour        = 5;       // Asia Block End (server hour)
 input bool   UseRolloverLock    = true;    // Block Around Rollover
 input int    RolloverHour       = 8;       // Rollover Hour (server time)
 input int    RolloverMinute     = 8;       // Rollover Minute
