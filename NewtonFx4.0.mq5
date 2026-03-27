@@ -29,6 +29,8 @@ input double MinVolRatio        = 1.15;    // Relative Volume Minimum
 input int    Fibo_Len           = 10;      // Fibonacci Lookback Bars
 input double FiboMinRetrace     = 0.236;   // Fibonacci Min Retracement
 input double FiboMaxRetrace     = 0.786;   // Fibonacci Max Retracement
+input int    FiboPullbackBars   = 5;       // Fibo Freshness: max bars since touch (0=off)
+input bool   RequireADXRising   = true;    // Require ADX Rising (ADX[1]>ADX[2])
 
 // ==================== ATR & DYNAMIC REGIME ====================
 input int    ATR_Len            = 10;      // ATR Fast Period
@@ -425,11 +427,11 @@ void DrawPanel()
    int fontSize = 9;
 
    // Read current indicators
-   double emaFast[2], emaSlow[2], adxArr[1];
+   double emaFast[2], emaSlow[2], adxArr[2];
    bool hasIndicators = true;
    if(CopyBuffer(emaFastHandle, 0, 1, 2, emaFast) <= 0) hasIndicators = false;
    if(CopyBuffer(emaSlowHandle, 0, 1, 2, emaSlow) <= 0) hasIndicators = false;
-   if(CopyBuffer(adxHandle,     0, 1, 1, adxArr)  <= 0) hasIndicators = false;
+   if(CopyBuffer(adxHandle,     0, 1, 2, adxArr)  <= 0) hasIndicators = false;
 
    double atrF = 0, atrS = 0, vr = 0;
    bool hasATR = GetATRRegime(atrF, atrS, vr);
@@ -455,9 +457,9 @@ void DrawPanel()
    int count = 0;
 
    // Resize arrays
-   ArrayResize(labels, 12);
-   ArrayResize(values, 12);
-   ArrayResize(colors, 12);
+   ArrayResize(labels, 16);
+   ArrayResize(values, 16);
+   ArrayResize(colors, 16);
 
    if(hasIndicators && hasATR)
    {
@@ -479,9 +481,19 @@ void DrawPanel()
 
       // 3. ADX
       labels[count] = "ADX:";
-      values[count] = DoubleToString(adxArr[0], 1) + " / " + DoubleToString(MinADX, 0);
-      colors[count] = (adxArr[0] >= MinADX) ? clrLimeGreen : clrOrangeRed;
+      values[count] = DoubleToString(adxArr[1], 1) + " / " + DoubleToString(MinADX, 0);
+      colors[count] = (adxArr[1] >= MinADX) ? clrLimeGreen : clrOrangeRed;
       count++;
+
+      // 3b. ADX Rising
+      if(RequireADXRising)
+      {
+         bool adxRising = (adxArr[1] > adxArr[0]);
+         labels[count] = "ADX Rise:";
+         values[count] = adxRising ? "YES" : "NO";
+         colors[count] = adxRising ? clrLimeGreen : clrOrangeRed;
+         count++;
+      }
 
       // 4. Volume
       double vol = (double)iVolume(_Symbol, _Period, 1);
@@ -511,6 +523,25 @@ void DrawPanel()
             values[count] = DoubleToString(retrace, 3);
             colors[count] = fibOK ? clrLimeGreen : clrOrangeRed;
             count++;
+
+            // 5b. Fibo Freshness
+            if(FiboPullbackBars > 0)
+            {
+               bool fresh = false;
+               for(int fb = 1; fb <= FiboPullbackBars; fb++)
+               {
+                  double c = iClose(_Symbol, _Period, fb);
+                  if(c <= 0) continue;
+                  double r = (c - fiboLow) / range;
+                  if((r >= FiboMinRetrace && r <= FiboMaxRetrace) ||
+                     ((1.0-r) >= FiboMinRetrace && (1.0-r) <= FiboMaxRetrace))
+                  { fresh = true; break; }
+               }
+               labels[count] = "FibFresh:";
+               values[count] = fresh ? "YES (" + IntegerToString(FiboPullbackBars) + "b)" : "NO";
+               colors[count] = fresh ? clrLimeGreen : clrOrangeRed;
+               count++;
+            }
          }
       }
 
@@ -557,15 +588,16 @@ void DrawPanel()
       else
       {
          // Signal readiness score
-         int score = 0;
-         if(adxArr[0] >= MinADX) score++;
+         int score = 0, total = 5;
+         if(adxArr[1] >= MinADX) score++;
          if(volRatio >= MinVolRatio) score++;
          if(emaLong || emaShort) score++;
          if(aboveEmas || belowEmas) score++;
          if(spread <= MaxSpreadPoints) score++;
+         if(RequireADXRising) { total++; if(adxArr[1] > adxArr[0]) score++; }
 
          labels[count] = "Signal:";
-         values[count] = IntegerToString(score) + "/5 conditions";
+         values[count] = IntegerToString(score) + "/" + IntegerToString(total) + " conditions";
          colors[count] = (score >= 4) ? clrLimeGreen : ((score >= 3) ? clrYellow : clrOrangeRed);
          count++;
       }
@@ -604,7 +636,7 @@ void DrawPanel()
    }
 
    // Clean up extra objects from previous draws
-   for(int i=count; i<12; i++)
+   for(int i=count; i<16; i++)
    {
       ObjectDelete(0, "NF4_l" + IntegerToString(i));
       ObjectDelete(0, "NF4_v" + IntegerToString(i));
@@ -614,7 +646,7 @@ void DrawPanel()
 void CleanupPanel()
 {
    ObjectDelete(0, "NF4_title");
-   for(int i=0; i<12; i++)
+   for(int i=0; i<16; i++)
    {
       ObjectDelete(0, "NF4_l" + IntegerToString(i));
       ObjectDelete(0, "NF4_v" + IntegerToString(i));
@@ -734,11 +766,14 @@ void CheckForSignal()
    if(SelectMyPosition()) return;
 
    // Read indicators
-   double emaFast[2], emaSlow[2], adx[1];
+   double emaFast[2], emaSlow[2], adx[2];
    if(CopyBuffer(emaFastHandle, 0, 1, 2, emaFast) <= 0) return;
    if(CopyBuffer(emaSlowHandle, 0, 1, 2, emaSlow) <= 0) return;
-   if(CopyBuffer(adxHandle,     0, 1, 1, adx)     <= 0) return;
-   if(adx[0] < MinADX) return;
+   if(CopyBuffer(adxHandle,     0, 1, 2, adx)     <= 0) return;
+   if(adx[1] < MinADX) return;
+
+   // ADX Rising filter: ADX[1] > ADX[2]
+   if(RequireADXRising && adx[1] <= adx[0]) return;
 
    // ATR regime
    double atrF, atrS, vr;
@@ -771,6 +806,24 @@ void CheckForSignal()
 
    bool fibLongOK  = (retrace >= FiboMinRetrace && retrace <= FiboMaxRetrace);
    bool fibShortOK = ((1.0 - retrace) >= FiboMinRetrace && (1.0 - retrace) <= FiboMaxRetrace);
+
+   // FibPullbackFresh: price must have touched fib zone within last N bars
+   if(FiboPullbackBars > 0)
+   {
+      bool freshLong = false, freshShort = false;
+      for(int fb = 1; fb <= FiboPullbackBars; fb++)
+      {
+         double c = iClose(_Symbol, _Period, fb);
+         if(c <= 0) continue;
+         double r = (c - fiboLow) / range;
+         if(!freshLong  && r >= FiboMinRetrace && r <= FiboMaxRetrace)  freshLong  = true;
+         if(!freshShort && (1.0-r) >= FiboMinRetrace && (1.0-r) <= FiboMaxRetrace) freshShort = true;
+         if(freshLong && freshShort) break;
+      }
+      fibLongOK  = fibLongOK  && freshLong;
+      fibShortOK = fibShortOK && freshShort;
+   }
+
    bool volOK      = (volRatio >= MinVolRatio);
 
    // EMA crossover confirmation
@@ -802,7 +855,7 @@ void CheckForSignal()
       partialClosed   = false;
       partialClosePrice = ask + PartialCloseATR * entryATR;
 
-      Print("LONG: ADX=", DoubleToString(adx[0],1),
+      Print("LONG: ADX=", DoubleToString(adx[1],1),
             " VR=", DoubleToString(vr,2),
             " ATR=", DoubleToString(atrF,_Digits),
             " Lots=", DoubleToString(lots,2));
@@ -834,7 +887,7 @@ void CheckForSignal()
       partialClosed    = false;
       partialClosePrice = bid - PartialCloseATR * entryATR;
 
-      Print("SHORT: ADX=", DoubleToString(adx[0],1),
+      Print("SHORT: ADX=", DoubleToString(adx[1],1),
             " VR=", DoubleToString(vr,2),
             " ATR=", DoubleToString(atrF,_Digits),
             " Lots=", DoubleToString(lots,2));
