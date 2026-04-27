@@ -15,7 +15,7 @@ CTrade trade;
 // ==================== RISK MANAGEMENT ====================
 input double LotSize            = 0.02;    // Fixed Lot Size
 input bool   UseRiskPercent     = false;   // Use Risk % Instead of Fixed Lots
-input double RiskPercent        = 0.025;   // Risk % of Equity Per Trade
+input double RiskPercent        = 1.0;     // Risk % of Equity Per Trade (1.0 = 1%)
 input int    MaxTradesPerDay    = 8;       // Max Trades Per Day
 input double DailyStopPct      = 4.5;     // Daily Max Drawdown % (kill switch)
 input double WeeklyStopPct     = 9.5;     // Weekly Max Drawdown % (kill switch)
@@ -31,6 +31,7 @@ input double FiboMinRetrace     = 0.236;   // Fibonacci Min Retracement
 input double FiboMaxRetrace     = 0.786;   // Fibonacci Max Retracement
 input int    FiboPullbackBars   = 3;       // Fibo Freshness: max bars since touch (0=off)
 input bool   RequireADXRising   = true;    // Require ADX Rising (ADX[1]>ADX[2])
+input double ADXRiseEps         = 0.1;     // ADX Rising Tolerance (points)
 
 // ==================== ATR & DYNAMIC REGIME ====================
 input int    ATR_Len            = 10;      // ATR Fast Period
@@ -49,6 +50,7 @@ input double BE_ATR_Trigger     = 3.5;     // Break Even Trigger (ATR multiplier
 input double Trail_ATR_Mult     = 2.4;     // Trailing Stop (ATR multiplier)
 input double Trail_Offset_ATR   = 0.8;     // Trailing Offset (ATR multiplier)
 input double TrailAfterBE_Mult  = 2.3;     // Trailing After BE (ATR multiplier)
+input bool   TrailOnlyAfterBE   = false;   // Activate Trailing Only After Break-Even
 
 // ==================== PARTIAL CLOSE ====================
 input bool   UsePartialClose    = true;    // Enable Partial Close
@@ -115,6 +117,10 @@ double weekEquityStart = 0.0;
 int    dayOfYearTrack  = -1;
 int    weekOfYearTrack = -1;
 
+// Cached daily trade counter (avoid history scan every bar)
+int    todayTradeCount = 0;
+int    todayTradeDay   = -1;
+
 //+------------------------------------------------------------------+
 //|                     HELPER FUNCTIONS                              |
 //+------------------------------------------------------------------+
@@ -138,6 +144,56 @@ double NormLots(double lots)
    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
    return Clamp(lots, minLot, maxLot);
+}
+
+// ----- Global Variables (persist across EA restart) -----
+string GVKey(string suffix)
+{
+   return StringFormat("NF4_%I64d_%s", MagicNumber, suffix);
+}
+
+void StoreEntryLots(double lots)
+{
+   GlobalVariableSet(GVKey("entryLots"), lots);
+}
+
+double LoadEntryLots()
+{
+   string k = GVKey("entryLots");
+   if(GlobalVariableCheck(k)) return GlobalVariableGet(k);
+   return 0.0;
+}
+
+void ClearEntryGV()
+{
+   GlobalVariableDel(GVKey("entryLots"));
+}
+
+// ----- Broker stops-level clamping -----
+double MinStopDistance()
+{
+   long lvl = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   return (double)lvl * _Point;
+}
+
+void ClampBuyStops(double price, double &sl, double &tp)
+{
+   double minDist = MinStopDistance();
+   if(minDist <= 0) return;
+   double maxSL = price - minDist;
+   double minTP = price + minDist;
+   if(sl > 0 && sl > maxSL) sl = NormPrice(maxSL);
+   if(tp > 0 && tp < minTP) tp = NormPrice(minTP);
+}
+
+void ClampSellStops(double price, double &sl, double &tp)
+{
+   double minDist = MinStopDistance();
+   if(minDist <= 0) return;
+   double minSL = price + minDist;
+   double maxTP = price - minDist;
+   if(sl > 0 && sl < minSL) sl = NormPrice(minSL);
+   if(tp > 0 && tp > maxTP) tp = NormPrice(maxTP);
 }
 
 int GetDayOfYear()
@@ -280,6 +336,17 @@ int CountTodayTrades()
    return cnt;
 }
 
+int GetTodayTradesCached()
+{
+   int doy = GetDayOfYear();
+   if(todayTradeDay != doy)
+   {
+      todayTradeDay   = doy;
+      todayTradeCount = CountTodayTrades();
+   }
+   return todayTradeCount;
+}
+
 //+------------------------------------------------------------------+
 //|                     ATR REGIME                                    |
 //+------------------------------------------------------------------+
@@ -349,10 +416,9 @@ void ResetTradeState()
 //+------------------------------------------------------------------+
 bool SendBuy(double lots, double price, double sl, double tp, const string comment)
 {
-   trade.SetExpertMagicNumber(MagicNumber);
-   trade.SetDeviationInPoints(SlippagePoints);
    sl = NormPrice(sl);
    tp = NormPrice(tp);
+   ClampBuyStops(price, sl, tp);
 
    if(trade.Buy(lots, _Symbol, price, sl, tp, comment))
    {
@@ -363,29 +429,29 @@ bool SendBuy(double lots, double price, double sl, double tp, const string comme
       return true;
    }
 
-   Print("BUY failed, retrying...");
+   Print("BUY failed (retcode=", trade.ResultRetcode(), "), retrying...");
    Sleep(150);
    double newPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    if(newPrice <= 0) return false;
    double diff = newPrice - price;
    sl = NormPrice(sl + diff);
    tp = NormPrice(tp + diff);
+   ClampBuyStops(newPrice, sl, tp);
 
    if(trade.Buy(lots, _Symbol, newPrice, sl, tp, comment))
    {
       Print("BUY retry OK at ", DoubleToString(newPrice, _Digits));
       return true;
    }
-   Print("BUY retry also failed");
+   Print("BUY retry also failed (retcode=", trade.ResultRetcode(), ")");
    return false;
 }
 
 bool SendSell(double lots, double price, double sl, double tp, const string comment)
 {
-   trade.SetExpertMagicNumber(MagicNumber);
-   trade.SetDeviationInPoints(SlippagePoints);
    sl = NormPrice(sl);
    tp = NormPrice(tp);
+   ClampSellStops(price, sl, tp);
 
    if(trade.Sell(lots, _Symbol, price, sl, tp, comment))
    {
@@ -396,20 +462,21 @@ bool SendSell(double lots, double price, double sl, double tp, const string comm
       return true;
    }
 
-   Print("SELL failed, retrying...");
+   Print("SELL failed (retcode=", trade.ResultRetcode(), "), retrying...");
    Sleep(150);
    double newPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    if(newPrice <= 0) return false;
    double diff = newPrice - price;
    sl = NormPrice(sl + diff);
    tp = NormPrice(tp + diff);
+   ClampSellStops(newPrice, sl, tp);
 
    if(trade.Sell(lots, _Symbol, newPrice, sl, tp, comment))
    {
       Print("SELL retry OK at ", DoubleToString(newPrice, _Digits));
       return true;
    }
-   Print("SELL retry also failed");
+   Print("SELL retry also failed (retcode=", trade.ResultRetcode(), ")");
    return false;
 }
 
@@ -676,11 +743,18 @@ int OnInit()
    dayOfYearTrack  = GetDayOfYear();
    weekOfYearTrack = GetWeekOfYear();
 
+   trade.SetExpertMagicNumber(MagicNumber);
+   trade.SetDeviationInPoints(SlippagePoints);
+
+   todayTradeDay   = GetDayOfYear();
+   todayTradeCount = CountTodayTrades();
+
    ResetTradeState();
 
    Print("NewtonFX v4.0 initialized. Equity=", DoubleToString(dayEquityStart, 2),
          " Magic=", MagicNumber,
-         " RiskMode=", UseRiskPercent ? DoubleToString(RiskPercent,1)+"%" : DoubleToString(LotSize,2)+" lots");
+         " RiskMode=", UseRiskPercent ? DoubleToString(RiskPercent,2)+"%" : DoubleToString(LotSize,2)+" lots",
+         " TradesToday=", todayTradeCount);
    return INIT_SUCCEEDED;
 }
 
@@ -709,12 +783,24 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
       if(!HistoryDealSelect(dealTicket)) return;
       if((long)HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != MagicNumber) return;
       long entry = (long)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
-      if(entry == DEAL_ENTRY_OUT || entry == DEAL_ENTRY_OUT_BY)
+
+      if(entry == DEAL_ENTRY_IN)
+      {
+         int doy = GetDayOfYear();
+         if(todayTradeDay != doy)
+         {
+            todayTradeDay   = doy;
+            todayTradeCount = 0;
+         }
+         todayTradeCount++;
+      }
+      else if(entry == DEAL_ENTRY_OUT || entry == DEAL_ENTRY_OUT_BY)
       {
          if(!SelectMyPosition())
          {
             Print("Position closed - resetting trade state");
             ResetTradeState();
+            ClearEntryGV();
          }
       }
    }
@@ -758,8 +844,8 @@ void CheckForSignal()
    double spread = GetSpreadPoints();
    if(spread > MaxSpreadPoints) return;
 
-   // Trades/day limit
-   int todayTrades = CountTodayTrades();
+   // Trades/day limit (cached counter)
+   int todayTrades = GetTodayTradesCached();
    if(todayTrades >= MaxTradesPerDay) return;
 
    // Only 1 position at a time
@@ -772,8 +858,8 @@ void CheckForSignal()
    if(CopyBuffer(adxHandle,     0, 1, 2, adx)     <= 0) return;
    if(adx[1] < MinADX) return;
 
-   // ADX Rising filter: ADX[1] > ADX[2]
-   if(RequireADXRising && adx[1] <= adx[0]) return;
+   // ADX Rising filter: ADX[1] > ADX[2] + tolerance
+   if(RequireADXRising && (adx[1] - adx[0]) < ADXRiseEps) return;
 
    // ATR regime
    double atrF, atrS, vr;
@@ -861,7 +947,10 @@ void CheckForSignal()
             " Lots=", DoubleToString(lots,2));
 
       if(SendBuy(lots, ask, sl, tp, "LONG"))
+      {
          lastTradeTime = TimeCurrent();
+         StoreEntryLots(lots);
+      }
       return;
    }
 
@@ -893,7 +982,10 @@ void CheckForSignal()
             " Lots=", DoubleToString(lots,2));
 
       if(SendSell(lots, bid, sl, tp, "SHORT"))
+      {
          lastTradeTime = TimeCurrent();
+         StoreEntryLots(lots);
+      }
       return;
    }
 }
@@ -933,9 +1025,17 @@ void ManagePositions()
       partialClosePrice = openPrice + PartialCloseATR * atrF;
       if(curSL >= openPrice && curSL > 0.0)
          beTriggeredLong = true;
-      if(entryLotSize <= 0) entryLotSize = posVolume;
+      if(entryLotSize <= 0)
+      {
+         double saved = LoadEntryLots();
+         entryLotSize = (saved > 0) ? saved : posVolume;
+      }
+      if(entryLotSize > 0 && posVolume < entryLotSize * 0.95)
+         partialClosed = true;
       Print("BUY state recovered: BE=", DoubleToString(bePriceLong,_Digits),
-            " Partial=", DoubleToString(partialClosePrice,_Digits));
+            " Partial=", DoubleToString(partialClosePrice,_Digits),
+            " EntryLots=", DoubleToString(entryLotSize,2),
+            " PartialDone=", partialClosed);
    }
    if(posType == POSITION_TYPE_SELL && bePriceShort <= 0.0)
    {
@@ -943,9 +1043,17 @@ void ManagePositions()
       partialClosePrice = openPrice - PartialCloseATR * atrF;
       if(curSL <= openPrice && curSL > 0.0)
          beTriggeredShort = true;
-      if(entryLotSize <= 0) entryLotSize = posVolume;
+      if(entryLotSize <= 0)
+      {
+         double saved = LoadEntryLots();
+         entryLotSize = (saved > 0) ? saved : posVolume;
+      }
+      if(entryLotSize > 0 && posVolume < entryLotSize * 0.95)
+         partialClosed = true;
       Print("SELL state recovered: BE=", DoubleToString(bePriceShort,_Digits),
-            " Partial=", DoubleToString(partialClosePrice,_Digits));
+            " Partial=", DoubleToString(partialClosePrice,_Digits),
+            " EntryLots=", DoubleToString(entryLotSize,2),
+            " PartialDone=", partialClosed);
    }
 
    // Live ATR for dynamic TP
@@ -981,7 +1089,6 @@ void ManagePositions()
          double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
          if(closeLots >= minLot && (posVolume - closeLots) >= minLot)
          {
-            trade.SetExpertMagicNumber(MagicNumber);
             if(trade.PositionClosePartial(posTicket, closeLots))
             {
                Print("BUY partial close: ", DoubleToString(closeLots,2),
@@ -991,27 +1098,30 @@ void ManagePositions()
          }
       }
 
-      // 3. Dynamic TP
+      // 3. Dynamic TP (only moves favorable: up for BUY)
       if(UseDynamicTP)
       {
          double dynTP = NormPrice(openPrice + tpMultDyn * liveATR);
          double minTP = NormPrice(openPrice + DynTP_MinMult * liveATR);
          if(dynTP < minTP) dynTP = minTP;
-         if(dynTP > currentBid + _Point && MathAbs(dynTP - tp) > liveATR * 0.05)
+         if(dynTP > currentBid + _Point && dynTP > tp + liveATR * 0.05)
          {
             finalTP = dynTP;
             needModify = true;
          }
       }
 
-      // 4. Trailing stop (tighter after BE)
-      double effectiveTrailMult = isBEd ? TrailAfterBE_Mult : trMultDyn;
-      double offset = trOffDyn * atrF;
-      double newSL  = NormPrice(currentBid - effectiveTrailMult * atrF);
-      if(currentBid > openPrice + offset && newSL > finalSL)
+      // 4. Trailing stop (skip pre-BE if TrailOnlyAfterBE)
+      if(isBEd || !TrailOnlyAfterBE)
       {
-         finalSL = newSL;
-         needModify = true;
+         double effectiveTrailMult = isBEd ? TrailAfterBE_Mult : trMultDyn;
+         double offset = trOffDyn * atrF;
+         double newSL  = NormPrice(currentBid - effectiveTrailMult * atrF);
+         if(currentBid > openPrice + offset && newSL > finalSL)
+         {
+            finalSL = newSL;
+            needModify = true;
+         }
       }
 
       // 5. Apply modifications
@@ -1050,7 +1160,6 @@ void ManagePositions()
          double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
          if(closeLots >= minLot && (posVolume - closeLots) >= minLot)
          {
-            trade.SetExpertMagicNumber(MagicNumber);
             if(trade.PositionClosePartial(posTicket, closeLots))
             {
                Print("SELL partial close: ", DoubleToString(closeLots,2),
@@ -1060,27 +1169,30 @@ void ManagePositions()
          }
       }
 
-      // 3. Dynamic TP
+      // 3. Dynamic TP (only moves favorable: down for SELL)
       if(UseDynamicTP)
       {
          double dynTP = NormPrice(openPrice - tpMultDyn * liveATR);
          double minTP = NormPrice(openPrice - DynTP_MinMult * liveATR);
          if(dynTP > minTP) dynTP = minTP;
-         if(dynTP < currentAsk - _Point && MathAbs(dynTP - tp) > liveATR * 0.05)
+         if(dynTP < currentAsk - _Point && dynTP < tp - liveATR * 0.05)
          {
             finalTP = dynTP;
             needModify = true;
          }
       }
 
-      // 4. Trailing stop (tighter after BE)
-      double effectiveTrailMult = isBEd ? TrailAfterBE_Mult : trMultDyn;
-      double offset = trOffDyn * atrF;
-      double newSL  = NormPrice(currentAsk + effectiveTrailMult * atrF);
-      if(currentAsk < openPrice - offset && (newSL < finalSL || finalSL == 0.0))
+      // 4. Trailing stop (skip pre-BE if TrailOnlyAfterBE)
+      if(isBEd || !TrailOnlyAfterBE)
       {
-         finalSL = newSL;
-         needModify = true;
+         double effectiveTrailMult = isBEd ? TrailAfterBE_Mult : trMultDyn;
+         double offset = trOffDyn * atrF;
+         double newSL  = NormPrice(currentAsk + effectiveTrailMult * atrF);
+         if(currentAsk < openPrice - offset && (newSL < finalSL || finalSL == 0.0))
+         {
+            finalSL = newSL;
+            needModify = true;
+         }
       }
 
       // 5. Apply modifications
